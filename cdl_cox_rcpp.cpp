@@ -13,6 +13,8 @@ Rcpp::List cdlcoxRcpp (const Map<MatrixXd> &y, const Map<MatrixXd> &x, const Mat
                   const bool standardize = true, const double alpha = 1, 
                   const double alpha1 = 0, const double alpha2 = 1, const double thresh = 1e-7)
 {
+    typedef Matrix<bool, Dynamic, 1> VectorXb;
+    
     int n = y.rows();
     int p = x.cols();
     VectorXd delta = y.col(1);
@@ -90,42 +92,74 @@ Rcpp::List cdlcoxRcpp (const Map<MatrixXd> &y, const Map<MatrixXd> &x, const Mat
                 lambdas[i] = lambdas[i-1] * alf;
             }
         }
+        VectorXb strong_set = VectorXb::Constant(p, false);
+        VectorXb active_set = VectorXb::Constant(p, true);
+        double lambda_old = 0.0;
         
         //// penalty path loop
         for (int l = 0; l < nlam; l++) {
             double lambda_current = lambdas[l];
-            double dev_out = 1e10;
             int iter = 0;
+            VectorXd gradient = ((x.array().colwise() * r.array()).colwise().sum().array() - (r.sum() * xm).array()) * xs.array();
+            for (int j = 0; j < p; j++) {
+                strong_set[j] = std::abs(gradient[j]) > alpha * (2*lambda_current - lambda_old);
+            }
             VectorXd beta_old(p);
             VectorXd xv(p);
             //// outer re-weighted least squares loop
-            while (dev_out >= thresh) {
+            bool converge_outer = false;
+            while (!converge_outer) {
                 beta_old = beta;
                 xv = (x.cwiseProduct(x).transpose() * W - (x.transpose() * W).cwiseProduct(2*xm.transpose()) +
                     W.sum() * xm.transpose().cwiseProduct(xm.transpose())).cwiseProduct(xs.transpose().cwiseProduct(xs.transpose()) / n);
                 //// inner coordinate descent loop
-                double dev_in = 1e10;
-                while (dev_in >= thresh) {
-                    dev_in = 0;
+                bool converge_inner = false;
+                while (!converge_inner) {
+                    double dlx = 0.0;
                     for (int j = 0; j < p; j++) {
-                        double gj = (x.col(j).dot(r) - xm[j] * r.sum()) * xs[j];
-                        double bj = beta[j];
-                        double wls = gj + bj * xv[j];
-                        double arg = abs(wls) - alpha * lambda_current;
-                        if (arg > 0) {
-                            beta[j] = copysign(arg, wls) / (xv[j] + (1 - alpha) * lambda_current);
-                        } else {
-                            beta[j] = 0;
+                        if (strong_set[j] && active_set[j]) {
+                            double gj = (x.col(j).dot(r) - xm[j] * r.sum()) * xs[j];
+                            double bj = beta[j];
+                            double wls = gj + bj * xv[j];
+                            double arg = abs(wls) - alpha * lambda_current;
+                            if (arg > 0) {
+                                beta[j] = copysign(arg, wls) / (xv[j] + (1 - alpha) * lambda_current);
+                            } else {
+                                beta[j] = 0;
+                            }
+                            double del = beta[j] - bj;
+                            if (abs(del) > 0.0) {
+                                dlx = max(dlx, xv[j]*del*del);
+                                r -= del * (x.col(j).cwiseProduct(W) - xm[j] * W) * xs[j] / n;
+                            } else {
+                                active_set[j] = false;
+                            }
                         }
-                        double del = beta[j] - bj;
-                        dev_in = max(dev_in, abs(del));
-                        r -= del * (x.col(j).cwiseProduct(W) - xm[j] * W) * xs[j] / n;
                     }
                     iter += 1;
+                    if (dlx < thresh) {
+                        converge_inner = true;
+                        active_set.setConstant(true);
+                    }
                 }   // end of inner coordinate descent loop
-                dev_out = (beta - beta_old).array().abs().maxCoeff();
                 update_quadratic(x, beta, xm, xs, delta, ck, ri, d, n, m, W, r);
+                if ( (xv.cwiseProduct((beta-beta_old).cwiseProduct(beta-beta_old))).maxCoeff() < thresh ) {
+                    //// check kkt violation
+                    gradient = ((x.array().colwise() * r.array()).colwise().sum().array() - (r.sum() * xm).array()) * xs.array();
+                    int num_violations = 0;
+                    for (int j = 0; j < p; j++) {
+                        if (!strong_set[j]) {
+                            if (gradient[j] > alpha * lambda_current) {
+                                strong_set[j] = true;
+                                num_violations += 1;
+                            }
+                        }
+                    }
+                    if (num_violations == 0) {converge_outer = true;}
+                }
             }   // end of outer re-weighted loop
+            lambda_old = lambda_current;
+            
             if (standardize) {
                 betas.col(l) = beta.cwiseProduct(xs.transpose());
             } else {
@@ -199,6 +233,11 @@ Rcpp::List cdlcoxRcpp (const Map<MatrixXd> &y, const Map<MatrixXd> &x, const Mat
             }
         }
         
+        VectorXb strong_set = VectorXb::Constant(p+q, false);
+        VectorXb active_set = VectorXb::Constant(p+q, true);
+        double lambda1_old = 0.0;
+        double lambda2_old = 0.0;
+        
         //// penalty path loop
         int ncols = 0;
         for (int l2 = 0; l2 < nlam; l2++) {
@@ -209,51 +248,100 @@ Rcpp::List cdlcoxRcpp (const Map<MatrixXd> &y, const Map<MatrixXd> &x, const Mat
             
             for (int l1 = 0; l1 < nlam; l1++) {
                 double lambda1_current = lambda1[l1];
-                double dev_out = 1e10;
+                VectorXd gradient = ((X.array().colwise() * r.array()).colwise().sum().array() - (r.sum() * xm).array()) * xs.array();
+                for (int j = 0; j < p+q; j++) {
+                    if (j < p) {
+                        strong_set[j] = std::abs(gradient[j]) > alpha1 * (2 * lambda1_current - lambda1_old);
+                    } else {
+                        strong_set[j] = std::abs(gradient[j]) > alpha2 * (2 * lambda2_current - lambda2_old);
+                    }
+                }
                 VectorXd beta_old(p+q);
                 VectorXd xv(p);
+                
                 //// outer re-weighted least squares loop
-                while (dev_out >= thresh) {
+                bool converge_outer = false;
+                while (!converge_outer) {
                     beta_old = beta;
                     xv = (X.cwiseProduct(X).transpose() * W - (X.transpose() * W).cwiseProduct(2*xm.transpose()) +
                         W.sum() * xm.transpose().cwiseProduct(xm.transpose())).cwiseProduct(xs.transpose().cwiseProduct(xs.transpose()) / n);
+                    
                     //// inner coordinate descent loop
-                    double dev_in = 1e10;
-                    while (dev_in >= thresh) {
-                        dev_in = 0;
+                    bool converge_inner = false;
+                    while (!converge_inner) {
+                        double dlx = 0;
                         for (int j = 0; j < p; j++) {
-                            double gj = (X.col(j).dot(r) - xm[j] * r.sum()) * xs[j];
-                            double bj = beta[j];
-                            double wls = gj + bj * xv[j];
-                            double arg = abs(wls) - alpha1 * lambda1_current;
-                            if (arg > 0) {
-                                beta[j] = copysign(arg, wls) / (xv[j] + (1 - alpha1) * lambda1_current);
-                            } else {
-                                beta[j] = 0;
+                            if (strong_set[j] && active_set[j]) {
+                                double gj = (X.col(j).dot(r) - xm[j] * r.sum()) * xs[j];
+                                double bj = beta[j];
+                                double wls = gj + bj * xv[j];
+                                double arg = abs(wls) - alpha1 * lambda1_current;
+                                if (arg > 0) {
+                                    beta[j] = copysign(arg, wls) / (xv[j] + (1 - alpha1) * lambda1_current);
+                                } else {
+                                    beta[j] = 0;
+                                }
+                                double del = beta[j] - bj;
+                                if (abs(del) > 0.0) {
+                                    dlx = max(dlx, xv[j]*del*del);
+                                    r -= del * (X.col(j).cwiseProduct(W) - xm[j] * W) * xs[j] / n;
+                                } else {
+                                    active_set[j] = false;
+                                }
                             }
-                            double del = beta[j] - bj;
-                            dev_in = max(dev_in, abs(del));
-                            r -= del * (X.col(j).cwiseProduct(W) - xm[j] * W) * xs[j] / n;
                         }
                         for (int j = p; j < (p+q); j++) {
-                            double gj = (X.col(j).dot(r) - xm[j] * r.sum()) * xs[j];
-                            double bj = beta[j];
-                            double wls = gj + bj * xv[j];
-                            double arg = abs(wls) - alpha2 * lambda2_current;
-                            if (arg > 0) {
-                                beta[j] = copysign(arg, wls) / (xv[j] + (1 - alpha2) * lambda2_current);
-                            } else {
-                                beta[j] = 0;
+                            if (strong_set[j] && active_set[j]) {
+                                double gj = (X.col(j).dot(r) - xm[j] * r.sum()) * xs[j];
+                                double bj = beta[j];
+                                double wls = gj + bj * xv[j];
+                                double arg = abs(wls) - alpha2 * lambda2_current;
+                                if (arg > 0) {
+                                    beta[j] = copysign(arg, wls) / (xv[j] + (1 - alpha2) * lambda2_current);
+                                } else {
+                                    beta[j] = 0;
+                                }
+                                double del = beta[j] - bj;
+                                if (abs(del) > 0.0) {
+                                    dlx = max(dlx, xv[j]*del*del);
+                                    r -= del * (X.col(j).cwiseProduct(W) - xm[j] * W) * xs[j] / n;
+                                } else {
+                                    active_set[j] = false;
+                                }
                             }
-                            double del = beta[j] - bj;
-                            dev_in = max(dev_in, abs(del));
-                            r -= del * (X.col(j).cwiseProduct(W) - xm[j] * W) * xs[j] / n;
+                        }
+                        if (dlx < thresh) {
+                            converge_inner = true;
+                            active_set.setConstant(true);
                         }
                     }   // end of inner coordinate descent loop
-                    dev_out = (beta - beta_old).array().abs().maxCoeff();
                     update_quadratic(X, beta, xm, xs, delta, ck, ri, d, n, m, W, r);
+                    if ( (xv.cwiseProduct((beta-beta_old).cwiseProduct(beta-beta_old))).maxCoeff() < thresh ) {
+                        //// check kkt violation
+                        gradient = ((X.array().colwise() * r.array()).colwise().sum().array() - (r.sum() * xm).array()) * xs.array();
+                        int num_violations = 0;
+                        for (int j = 0; j < p; j++) {
+                            if (!strong_set[j]) {
+                                if (gradient[j] > alpha1 * lambda1_current) {
+                                    strong_set[j] = true;
+                                    num_violations += 1;
+                                }
+                            }
+                        }
+                        for (int j = p; j < (p+q); j++) {
+                            if (!strong_set[j]) {
+                                if (gradient[j] > alpha2 * lambda2_current) {
+                                    strong_set[j] = true;
+                                    num_violations += 1;
+                                }
+                            }
+                        }
+                        if (num_violations == 0) {converge_outer = true;}
+                    }
                 }   // end of outer re-weighted loop
-                //// hole the estimated beta, W, r of lambda1 at l1=1, for warm start of next lambda2 and lambda1 at l1=1
+                lambda1_old = lambda1_current;
+                
+                //// hold the estimated beta, W, r of lambda1 at l1=1, for warm start of next lambda2 and lambda1 at l1=1
                 if (l1==0) {
                     beta_l11 = beta;
                     W_l11 = W;
@@ -276,6 +364,7 @@ Rcpp::List cdlcoxRcpp (const Map<MatrixXd> &y, const Map<MatrixXd> &x, const Mat
                 }
                 ncols += 1;
             }   // end of lambda1 loop
+            lambda2_old = lambda2_current;
         }   // end of lambda2 loop
         
         return Rcpp::List::create(Rcpp::Named("lambda1") = lambda1,
