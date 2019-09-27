@@ -384,7 +384,7 @@ int main()
 {
     int error;
     MatrixXd dat;
-    error = csvRead(dat, "/Users/dixinshen/Dropbox/hierr_cox_logit/PlayEigen/CoxExample.csv", 15);
+    error = csvRead(dat, "/Users/dixinshen/Dropbox/hierr_cox_logit/PlayEigen/unordered_cox.csv", 15);
     cout << "Function call csvRead(), exit code: " <<  error << endl;
 //    if (error == 0) {
 //        cout << "Matrix (" << dat.rows() << "x" << dat.cols() << "):" << endl;4
