@@ -2,6 +2,7 @@
 #include <RcppEigen.h>
 #include <iostream>
 #include <vector>
+#include "sort.h"
 using namespace Eigen;
 using namespace std;
 
@@ -13,9 +14,14 @@ typedef Eigen::Map<const Eigen::VectorXd> MapVec;
 // [[Rcpp::depends(RcppEigen)]]
 
 // [[Rcpp::export]]
-VecXd coxphRcpp (const Eigen::Map<Eigen::MatrixXd> y, const Eigen::Map<Eigen::MatrixXd> x,
+VecXd coxphRcpp(Eigen::MatrixXd &y, Eigen::MatrixXd &x,
                  const double thresh = 1e-7, const int iter_max = 1000)
 {
+    // sort y, x by time in ascending order
+    vector<size_t> index = sort_index(y.col(0));
+    order(y, index);
+    order(x, index);
+    
     int n = y.rows();
     int p = x.cols();
     VecXd delta = y.col(1);

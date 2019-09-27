@@ -7,16 +7,21 @@
 #include <Eigen/Sparse>
 #include <vector>
 #include "quad.h"
+#include "sort.h"
 
 using namespace Eigen;
 using namespace std;
 
 int csvRead(MatrixXd& outputMatrix, const string& fileName, const streamsize dPrec);
 
-MatrixXd cdl_cox (const Ref<const MatrixXd> &y, const Ref<const MatrixXd> &x, const Ref<const MatrixXd> &z = MatrixXd(0,0),
+MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = MatrixXd(0,0),
                   const bool standardize = true, const double alpha = 1, const double alpha1 = 0, const double alpha2 = 1, const double thresh = 1e-7)
 {
     typedef Matrix<bool, Dynamic, 1> VectorXb;
+    // sort y, x by time in ascending order
+    vector<size_t> index = sort_index(y.col(0));
+    order(y, index);
+    order(x, index);
 
     int n = y.rows();
     int p = x.cols();

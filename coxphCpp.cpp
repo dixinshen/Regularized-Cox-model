@@ -2,6 +2,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <vector>
+#include "sort.h"
 
 using namespace Eigen;
 using namespace std;
@@ -12,9 +13,14 @@ typedef Eigen::Map<const Eigen::MatrixXd> MapMat;
 typedef Eigen::MappedSparseMatrix<double> MapSpMat;
 typedef Eigen::Map<const Eigen::VectorXd> MapVec;
 
-VecXd coxphRcpp (const Eigen::Ref<Eigen::MatrixXd> & y, const Eigen::Ref<Eigen::MatrixXd> & x,
+VecXd coxphRcpp (Eigen::MatrixXd &y, Eigen::MatrixXd &x,
                  const double thresh = 1e-7, const int iter_max = 1000)
 {
+    // sort y, x by time in ascending order
+    vector<size_t> index = sort_index(y.col(0));
+    order(y, index);
+    order(x, index);
+
     int n = y.rows();
     int p = x.cols();
     VecXd delta = y.col(1);
@@ -102,10 +108,11 @@ VecXd coxphRcpp (const Eigen::Ref<Eigen::MatrixXd> & y, const Eigen::Ref<Eigen::
 int main()
 {
     MatrixXd y(42, 2);
-    y.col(0) << 1,1,2,2,3,4,4,5,5,6,6,6,6,7,8,8,8,8,9,10,10,11,11,11,12,12,13,15,16,17,17,19,20,22,22,23,23,25,32,32,34,35;
-    y.col(1) << 1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,1,1,0,1,0,1,0,1,1,1,1,1,1,1,0,0,0,1,1,1,1,0,0,0,0,0;
+    y.col(0) << 1,10,22,7,3,32,12,23,8,22,17,6,2,16,11,34,8,32,12,25,2,11,5,20,4,19,15,6,8,17,23,35,5,6,11,13,4,9,1,6,8,10;
+    y.col(1) << 1,1,1,1,1,0,1,1,1,1,1,1,1,1,1,0,1,0,1,0,1,0,1,0,1,0,1,1,1,0,1,0,1,1,1,1,1,0,1,0,1,0;
     MatrixXd x(42, 1);
-    x << 0,0,0,0,0,0,0,0,0,1,1,1,1,1,0,0,0,0,1,1,1,0,1,0,0,0,1,0,1,0,1,1,1,0,1,1,0,1,1,1,1,1;
+    x << 0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1;
+
 
 //    VecXd y(13);
 //    y << 1,2,3,3,4,5,5,5,6,7,8,8,9;
