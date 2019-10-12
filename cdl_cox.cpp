@@ -4,7 +4,6 @@
 
 #include <iostream>
 #include <Eigen/Dense>
-#include <Eigen/Sparse>
 #include <vector>
 #include "quad.h"
 #include "sort.h"
@@ -15,7 +14,8 @@ using namespace std;
 int csvRead(MatrixXd& outputMatrix, const string& fileName, const streamsize dPrec);
 
 MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = MatrixXd(0,0),
-                  const bool standardize = true, const double alpha = 1, const double alpha1 = 0, const double alpha2 = 1, const double thresh = 1e-7)
+                  const bool standardize = true, const double alpha = 1, const double alpha1 = 0, const double alpha2 = 1,
+                  const double thresh = 1e-7, const int iter_max_outer = 500, const int iter_max_inner = 500)
 {
     typedef Matrix<bool, Dynamic, 1> VectorXb;
     // sort y, x by time in ascending order
@@ -47,13 +47,13 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
     int ck_prime = 0;
     VectorXi ck(n+1);
     VectorXi ri(m+1);
-    ri[0] = n;
+    ri[m] = 0;
     for (int k = 1; k <= n; k++) {
         ck[k] = ck_prime;
         for (int j = ck_prime; j < m; j++) {
             if (D[j] <= y((k-1),0)) {
                 ck[k] += 1;
-                ri[ck[k]] = n - k + 1;
+                ri[ck[k]-1] = n - k + 1;
             } else {
                 break;
             }
@@ -115,14 +115,18 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
             VectorXd beta_old(p);
             VectorXd xv(p);
             //// outer re-weighted least squares loop
+            int iter_outer = 0;
             bool converge_outer = false;
-            while (!converge_outer) {
+            while (!converge_outer && iter_outer <= iter_max_outer) {
+                iter_outer += 1;
                 beta_old = beta;
                 xv = (x.cwiseProduct(x).transpose() * W - (x.transpose() * W).cwiseProduct(2*xm.transpose()) +
                       W.sum() * xm.transpose().cwiseProduct(xm.transpose())).cwiseProduct(xs.transpose().cwiseProduct(xs.transpose()) / n);
                 //// inner coordinate descent loop
+                int iter_inner = 0;
                 bool converge_inner = false;
-                while (!converge_inner) {
+                while (!converge_inner && iter_inner <= iter_max_inner) {
+                    iter_inner +=1;
                     double dlx = 0.0;
                     for (int j = 0; j < p; j++) {
                         if (strong_set[j] && active_set[j]) {
@@ -266,16 +270,20 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
                 VectorXd beta_old(p+q);
                 VectorXd xv(p);
 
-                //// outer re-weighted least squares loop
+                //// outer reweighted least squares loop
+                int iter_outer = 0;
                 bool converge_outer = false;
-                while (!converge_outer) {
+                while (!converge_outer && iter_outer <= iter_max_outer) {
+                    iter_outer += 1;
                     beta_old = beta;
                     xv = (X.cwiseProduct(X).transpose() * W - (X.transpose() * W).cwiseProduct(2*xm.transpose()) +
                           W.sum() * xm.transpose().cwiseProduct(xm.transpose())).cwiseProduct(xs.transpose().cwiseProduct(xs.transpose()) / n);
 
                     //// inner coordinate descent loop
+                    int iter_inner = 0;
                     bool converge_inner = false;
-                    while (!converge_inner) {
+                    while (!converge_inner && iter_inner <= iter_max_inner) {
+                        iter_inner += 1;
                         double dlx = 0;
                         for (int j = 0; j < p; j++) {
                             if (strong_set[j] && active_set[j]) {
@@ -323,7 +331,8 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
                         }
                     }   // end of inner coordinate descent loop
                     update_quadratic(X, beta, xm, xs, delta, ck, ri, d, n, m, W, r);
-                    if ( (xv.cwiseProduct((beta-beta_old).cwiseProduct(beta-beta_old))).maxCoeff() < thresh ) {
+                    double diff_b = (xv.cwiseProduct((beta-beta_old).cwiseProduct(beta-beta_old))).maxCoeff();
+                    if ( diff_b < thresh ) {
                         //// check kkt violation
                         gradient = ((X.array().colwise() * r.array()).colwise().sum().array() - (r.sum() * xm).array()) * xs.array();
                         int num_violations = 0;
@@ -384,35 +393,48 @@ int main()
 {
     int error;
     MatrixXd dat;
-    error = csvRead(dat, "/Users/dixinshen/Dropbox/hierr_cox_logit/PlayEigen/unordered_cox.csv", 15);
+    error = csvRead(dat, "/Users/dixinshen/Dropbox/hierr_cox_logit/PlayEigen/test_xy.csv", 15);
     cout << "Function call csvRead(), exit code: " <<  error << endl;
 //    if (error == 0) {
 //        cout << "Matrix (" << dat.rows() << "x" << dat.cols() << "):" << endl;4
 //        cout << dat << endl;
 //    }
 
-    MatrixXd y(50,2);
+    MatrixXd y(100,2);
     y.col(0) = dat.col(0);
     y.col(1) = dat.col(1);
-    MatrixXd x(50, 10);
-    x = dat.rightCols(10);
+    MatrixXd x(100, 200);
+    x = dat.rightCols(200);
 //    cout << "y: " << endl << y << endl;
 //    cout << "x: " << endl << x << endl;
 
-    MatrixXd z;
-    z.resize(10,2);
-    z.col(0) << 1,1,0,0,1,1,1,0,1,1;
-    z.col(1) << 0,0,1,1,0,0,0,1,0,0;
+    int errorz;
+    MatrixXd datz;
+    errorz = csvRead(datz, "/Users/dixinshen/Dropbox/hierr_cox_logit/PlayEigen/test_z.csv", 15);
+    cout << "Function call csvRead(), exit code: " <<  errorz << endl;
+    MatrixXd z(200,200);
+    z = datz;
+//    cout << "z: " << endl << z << endl;
 
-    MatrixXd beta_glmnet = cdl_cox(y, x);
-    cout << "beta_1: " << endl << beta_glmnet.col(0).transpose() << endl;
-    cout << "beta_10: " << endl << beta_glmnet.col(9).transpose() << endl;
-    cout << "beta_30: " << endl << beta_glmnet.col(29).transpose() << endl;
+//    MatrixXd beta = cdl_cox(y, x, z);
+//    cout << "beta_1_1: " << endl << beta.col(0).transpose() << endl;
+//    cout << "beta_4_20: " << endl << beta.col(99).transpose() << endl;
 
+//    MatrixXd z;
+//    z.resize(10,2);
+//    z.col(0) << 1,1,0,0,1,1,1,0,1,1;
+//    z.col(1) << 0,0,1,1,0,0,0,1,0,0;
 
+//    MatrixXd beta_glmnet = cdl_cox(y, x);
+//    cout << "beta_1: " << endl << beta_glmnet.col(0).transpose() << endl;
+//    cout << "beta_10: " << endl << beta_glmnet.col(9).transpose() << endl;
+//    cout << "beta_30: " << endl << beta_glmnet.col(29).transpose() << endl;
+//
+//
     MatrixXd beta_ext = cdl_cox(y, x, z);
     cout << "beta_1_1: " << endl << beta_ext.col(0).transpose() << endl;
     cout << "beta_3_3: " << endl << beta_ext.col(42).transpose() << endl;
+    cout << "beta_4_20: " << endl << beta_ext.col(383).transpose() << endl;
     cout << "beta_10_10: " << endl << beta_ext.col(189).transpose() << endl;
 
 

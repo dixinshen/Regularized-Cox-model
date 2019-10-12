@@ -22,15 +22,11 @@ inline void update_quadratic(const Ref<const MatrixXd> &x, const Ref<const Vecto
     for (int i = 0; i < n; i++) {
         exp_eta[i] = exp(x.row(i).cwiseProduct(xs).cwiseProduct(beta.transpose()).sum() - xm.cwiseProduct(xs).cwiseProduct(beta.transpose()).sum());
     }
-    double sum_exp_eta_prime = exp_eta.sum();
+    double sum_exp_eta_prime = 0;
     VectorXd sum_exp_eta(m);
-    for (int i = 0; i < m; i++) {
-        if (ri[i] == ri[i+1]) {
-            sum_exp_eta[i] = sum_exp_eta_prime;
-        } else {
-            sum_exp_eta[i] = sum_exp_eta_prime - exp_eta.segment((n-ri[i]), (ri[i]-ri[i+1])).sum();
-            sum_exp_eta_prime = sum_exp_eta[i];
-        }
+    for (int i = m-1; i >= 0 && i < m; i--) {
+        sum_exp_eta[i] = sum_exp_eta_prime + exp_eta.segment((n-ri[i]), (ri[i]-ri[i+1])).sum();
+        sum_exp_eta_prime = sum_exp_eta[i];
     }
     double u_prime = 0;
     double u2_prime = 0;
