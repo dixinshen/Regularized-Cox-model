@@ -12,7 +12,8 @@ using namespace std;
 // [[Rcpp::export]]
 Rcpp::List cdlcoxRcpp (MatrixXd &y, MatrixXd &x, const MatrixXd z = MatrixXd(0,0),
                   const bool standardize = true, const double alpha = 1, 
-                  const double alpha1 = 0, const double alpha2 = 1, const double thresh = 1e-7)
+                  const double alpha1 = 0, const double alpha2 = 1, const double thresh = 1e-7,
+                  const int iter_max_outer = 500, const int iter_max_inner = 500)
 {
     typedef Matrix<bool, Dynamic, 1> VectorXb;
     // sort y, x by time in ascending order
@@ -44,13 +45,13 @@ Rcpp::List cdlcoxRcpp (MatrixXd &y, MatrixXd &x, const MatrixXd z = MatrixXd(0,0
     int ck_prime = 0;
     VectorXi ck(n+1);
     VectorXi ri(m+1);
-    ri[0] = n;
+    ri[m] = 0;
     for (int k = 1; k <= n; k++) {
         ck[k] = ck_prime;
         for (int j = ck_prime; j < m; j++) {
             if (D[j] <= y((k-1),0)) {
                 ck[k] += 1;
-                ri[ck[k]] = n - k + 1;
+                ri[ck[k]-1] = n - k + 1;
             } else {
                 break;
             }
@@ -112,14 +113,18 @@ Rcpp::List cdlcoxRcpp (MatrixXd &y, MatrixXd &x, const MatrixXd z = MatrixXd(0,0
             VectorXd beta_old(p);
             VectorXd xv(p);
             //// outer re-weighted least squares loop
+            int iter_outer = 0;
             bool converge_outer = false;
-            while (!converge_outer) {
+            while (!converge_outer && iter_outer <= iter_max_outer) {
+                iter_outer += 1;
                 beta_old = beta;
                 xv = (x.cwiseProduct(x).transpose() * W - (x.transpose() * W).cwiseProduct(2*xm.transpose()) +
                     W.sum() * xm.transpose().cwiseProduct(xm.transpose())).cwiseProduct(xs.transpose().cwiseProduct(xs.transpose()) / n);
                 //// inner coordinate descent loop
+                int iter_inner = 0;
                 bool converge_inner = false;
-                while (!converge_inner) {
+                while (!converge_inner && iter_inner <= iter_max_inner) {
+                    iter_inner +=1;
                     double dlx = 0.0;
                     for (int j = 0; j < p; j++) {
                         if (strong_set[j] && active_set[j]) {
@@ -264,16 +269,20 @@ Rcpp::List cdlcoxRcpp (MatrixXd &y, MatrixXd &x, const MatrixXd z = MatrixXd(0,0
                 VectorXd beta_old(p+q);
                 VectorXd xv(p);
                 
-                //// outer re-weighted least squares loop
+                //// outer reweighted least squares loop
+                int iter_outer = 0;
                 bool converge_outer = false;
-                while (!converge_outer) {
+                while (!converge_outer && iter_outer <= iter_max_outer) {
+                    iter_outer += 1;
                     beta_old = beta;
                     xv = (X.cwiseProduct(X).transpose() * W - (X.transpose() * W).cwiseProduct(2*xm.transpose()) +
                         W.sum() * xm.transpose().cwiseProduct(xm.transpose())).cwiseProduct(xs.transpose().cwiseProduct(xs.transpose()) / n);
                     
                     //// inner coordinate descent loop
+                    int iter_inner = 0;
                     bool converge_inner = false;
-                    while (!converge_inner) {
+                    while (!converge_inner && iter_inner <= iter_max_inner) {
+                        iter_inner += 1;
                         double dlx = 0;
                         for (int j = 0; j < p; j++) {
                             if (strong_set[j] && active_set[j]) {
@@ -321,7 +330,8 @@ Rcpp::List cdlcoxRcpp (MatrixXd &y, MatrixXd &x, const MatrixXd z = MatrixXd(0,0
                         }
                     }   // end of inner coordinate descent loop
                     update_quadratic(X, beta, xm, xs, delta, ck, ri, d, n, m, W, r);
-                    if ( (xv.cwiseProduct((beta-beta_old).cwiseProduct(beta-beta_old))).maxCoeff() < thresh ) {
+                    double diff_b = (xv.cwiseProduct((beta-beta_old).cwiseProduct(beta-beta_old))).maxCoeff();
+                    if ( diff_b < thresh ) {
                         //// check kkt violation
                         gradient = ((X.array().colwise() * r.array()).colwise().sum().array() - (r.sum() * xm).array()) * xs.array();
                         int num_violations = 0;
