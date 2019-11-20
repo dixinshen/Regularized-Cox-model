@@ -15,7 +15,8 @@ int csvRead(MatrixXd& outputMatrix, const string& fileName, const streamsize dPr
 
 MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = MatrixXd(0,0),
                   const bool standardize = true, const double alpha = 1, const double alpha1 = 0, const double alpha2 = 1,
-                  const double thresh = 1e-7, const int iter_max_outer = 500, const int iter_max_inner = 500)
+                  const VectorXd &lambda = VectorXd(0), const VectorXd &lambda1 = VectorXd(0), const VectorXd &lambda2 = VectorXd(0),
+                  const VectorXd &penalty_factor = VectorXd(0), const double thresh = 1e-7, const int iter_max_outer = 500, const int iter_max_inner = 500)
 {
     typedef Matrix<bool, Dynamic, 1> VectorXb;
     // sort y, x by time in ascending order
@@ -73,44 +74,69 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
         }
 
         //// compute lambda path
-        int nlam = 100;
-        MatrixXd betas(p, nlam);
+        VectorXd cmult;
+        if (penalty_factor.size() == 0) {
+            cmult = VectorXd::Ones(p);
+        } else {
+            cmult = penalty_factor * p / penalty_factor.sum();
+        }
+        int nlam;
+        VectorXd lam;
         VectorXd beta = VectorXd::Zero(p);
         VectorXd W(n);
         VectorXd r(n);
         update_quadratic(x, beta, xm, xs, delta, ck, ri, d, n, m, W, r);
+        if (lambda.size() == 0) {
+            nlam = 100;
+            lam.resize(nlam);
+            double lambdaMax = 0;
+            if (alpha > 0 && alpha <= 1) {
+                for (int j = 0; j < p; j++) {
+                    if (cmult[j] > 0) {
+                        lambdaMax = max(lambdaMax,
+                                        abs((x.col(j).dot(r) - r.sum() * xm[j]) * xs[j] / (cmult[j] * alpha)));
+                    }
+                }
+            } else {
+                for (int j =0; j < p; j++) {
+                    if (cmult[j] > 0) {
+                        lambdaMax = max(lambdaMax,
+                                        abs((x.col(j).dot(r) - r.sum() * xm[j]) * xs[j] / cmult[j]));
+                    }
+                }
+                lambdaMax *= 1000;
+            }
+            if (n >= p) {
+                double alf = 1 / exp(log(1 / 0.0001) / (nlam - 1));
+                lam[0] = lambdaMax;
+                for (int i = 1; i < nlam; i++) {
+                    lam[i] = lam[i - 1] * alf;
+                }
+            } else {
+                double alf = 1 / exp(log(1 / 0.01) / (nlam - 1));
+                lam[0] = lambdaMax;
+                for (int i = 1; i < nlam; i++) {
+                    lam[i] = lam[i - 1] * alf;
+                }
+            }
+        } else {
+            nlam = lambda.size();
+            lam.resize(nlam);
+            lam = lambda;
+        }
 
-        double lambdaMax;
-        VectorXd lambdas(nlam);
-        if (alpha > 0 && alpha <= 1) {
-            lambdaMax = ((((x.array().colwise() * r.array()).colwise().sum().array() - (r.sum() * xm).array()) * xs.array()).abs()).maxCoeff() / alpha;
-        } else {
-            lambdaMax = 1000 * ((((x.array().colwise() * r.array()).colwise().sum().array() - (r.sum() * xm).array()) * xs.array()).abs()).maxCoeff();
-        }
-        if (n >= p) {
-            double alf = 1/exp(log(1/0.0001)/(nlam-1));
-            lambdas[0] = lambdaMax;
-            for (int i = 1; i < nlam; i++) {
-                lambdas[i] = lambdas[i-1] * alf;
-            }
-        } else {
-            double alf = 1/exp(log(1/0.01)/(nlam-1));
-            lambdas[0] = lambdaMax;
-            for (int i = 1; i < nlam; i++) {
-                lambdas[i] = lambdas[i-1] * alf;
-            }
-        }
+        MatrixXd betas(p, nlam);
         VectorXb strong_set = VectorXb::Constant(p, false);
         VectorXb active_set = VectorXb::Constant(p, true);
         double lambda_old = 0.0;
 
         //// penalty path loop
         for (int l = 0; l < nlam; l++) {
-            double lambda_current = lambdas[l];
+            double lambda_current = lam[l];
             int iter = 0;
             VectorXd gradient = ((x.array().colwise() * r.array()).colwise().sum().array() - (r.sum() * xm).array()) * xs.array();
             for (int j = 0; j < p; j++) {
-                strong_set[j] = std::abs(gradient[j]) > alpha * (2*lambda_current - lambda_old);
+                strong_set[j] = std::abs(gradient[j]) > alpha * (2*lambda_current - lambda_old) * cmult[j];
             }
             VectorXd beta_old(p);
             VectorXd xv(p);
@@ -133,9 +159,9 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
                             double gj = (x.col(j).dot(r) - xm[j] * r.sum()) * xs[j];
                             double bj = beta[j];
                             double wls = gj + bj * xv[j];
-                            double arg = abs(wls) - alpha * lambda_current;
+                            double arg = abs(wls) - alpha * cmult[j] * lambda_current;
                             if (arg > 0) {
-                                beta[j] = copysign(arg, wls) / (xv[j] + (1 - alpha) * lambda_current);
+                                beta[j] = copysign(arg, wls) / (xv[j] + (1 - alpha) * cmult[j] * lambda_current);
                             } else {
                                 beta[j] = 0;
                             }
@@ -161,7 +187,7 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
                     int num_violations = 0;
                     for (int j = 0; j < p; j++) {
                         if (!strong_set[j]) {
-                            if (gradient[j] > alpha * lambda_current) {
+                            if (gradient[j] > alpha * cmult[j] * lambda_current) {
                                 strong_set[j] = true;
                                 num_violations += 1;
                             }
@@ -206,44 +232,93 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
             xs = RowVectorXd::Ones(p+q);
         }
         //// compute lambda path, 2D grid
-        int nlam = 20;
-//        vector< vector < vector <double> > > betas(nlam, vector<vector<double>> (nlam, vector<double> ((p+q), 0)));
-        MatrixXd betas(p+q, nlam*nlam);
-        VectorXd beta_l11 = VectorXd::Zero(p+q);
+        VectorXd cmult;
+        if (penalty_factor.size() == 0) {
+            cmult = VectorXd::Ones(p+q);
+        } else {
+            cmult = penalty_factor * (p+q) / penalty_factor.sum();
+        }
+        int nlam1;
+        int nlam2;
+        VectorXd lam1;
+        VectorXd lam2;
+        //        vector< vector < vector <double> > > betas(nlam, vector<vector<double>> (nlam, vector<double> ((p+q), 0)));
+        VectorXd beta_l11 = VectorXd::Zero(p + q);
         VectorXd W_l11(n);
         VectorXd r_l11(n);
         update_quadratic(X, beta_l11, xm, xs, delta, ck, ri, d, n, m, W_l11, r_l11);
-
-        double lambda1_max;
-        double lambda2_max;
-        VectorXd lambda1(nlam);
-        VectorXd lambda2(nlam);
-        if (alpha2 > 0 && alpha2 <= 1) {
-            lambda2_max = ((((X.rightCols(q).array().colwise() * r_l11.array()).colwise().sum().array() - (r_l11.sum() * xm.tail(q)).array()) * xs.tail(q).array()).abs()).maxCoeff() / alpha2;
-        } else {
-            lambda2_max = 1000 * ((((X.rightCols(q).array().colwise() * r_l11.array()).colwise().sum().array() - (r_l11.sum() * xm.tail(q)).array()) * xs.tail(q).array()).abs()).maxCoeff();
-        }
-        if (alpha1 > 0 && alpha1 <= 1) {
-            lambda1_max = ((((X.leftCols(p).array().colwise() * r_l11.array()).colwise().sum().array() - (r_l11.sum() * xm.head(p)).array()) * xs.head(p).array()).abs()).maxCoeff() / alpha1;
-        } else {
-            lambda1_max = 1000 * ((((X.leftCols(p).array().colwise() * r_l11.array()).colwise().sum().array() - (r_l11.sum() * xm.head(p)).array()) * xs.head(p).array()).abs()).maxCoeff();
-        }
-        lambda2[0] = lambda2_max;
-        lambda1[0] = lambda1_max;
-        if (n >= p+q) {
-            double alf = 1/exp(log(1/0.0001)/(nlam-1));
-            for (int i = 1; i < nlam; i++) {
-                lambda2[i] = lambda2[i-1] * alf;
-                lambda1[i] = lambda1[i-1] * alf;
+        if (lambda1.size() == 0 && lambda2.size() == 0) {
+            nlam1 = 20;
+            nlam2 = 20;
+            double lambda1_max = 0;
+            double lambda2_max = 0;
+            lam1.resize(nlam1);
+            lam2.resize(nlam1);
+            if (alpha2 > 0 && alpha2 <= 1) {
+                for (int j = p; j < (p+q); j++) {
+                    if (cmult[j] > 0) {
+                        lambda2_max = max(lambda2_max,
+                                          abs((X.col(j).dot(r_l11) - r_l11.sum() * xm[j]) * xs[j] /
+                                              (cmult[j] * alpha2)));
+                    }
+                }
+            } else {
+                for (int j = p; j < (p+q); j++) {
+                    if (cmult[j] > 0) {
+                        lambda2_max = max(lambda2_max,
+                                          abs((X.col(j).dot(r_l11) - r_l11.sum() * xm[j]) * xs[j] / cmult[j]));
+                    }
+                }
+                lambda2_max *= 1000;
+            }
+            if (alpha1 > 0 && alpha1 <= 1) {
+                for (int j = 0; j < p; j++) {
+                    if (cmult[j] > 0) {
+                        lambda1_max = max(lambda1_max,
+                                          abs((X.col(j).dot(r_l11) - r_l11.sum() * xm[j]) * xs[j] /
+                                              (cmult[j] * alpha1)));
+                    }
+                }
+            } else {
+                for (int j = 0; j < p; j++) {
+                    if (cmult[j] > 0) {
+                        lambda1_max = max(lambda1_max,
+                                          abs((X.col(j).dot(r_l11) - r_l11.sum() * xm[j]) * xs[j] / cmult[j]));
+                    }
+                }
+                lambda1_max *= 1000;
+            }
+            lam2[0] = lambda2_max;
+            lam1[0] = lambda1_max;
+            if (n >= p + q) {
+                double alf2 = 1 / exp(log(1 / 0.0001) / (nlam2 - 1));
+                double alf1 = 1 / exp(log(1 / 0.0001) / (nlam1 - 1));
+                for (int i = 1; i < nlam2; i++) {
+                    lam2[i] = lam2[i - 1] * alf2;
+                }
+                for (int i = 1; i < nlam1; i++) {
+                    lam1[i] = lam1[i - 1] * alf1;
+                }
+            } else {
+                double alf2 = 1 / exp(log(1 / 0.01) / (nlam2 - 1));
+                double alf1 = 1 / exp(log(1 / 0.01) / (nlam1 - 1));
+                for (int i = 1; i < nlam2; i++) {
+                    lam2[i] = lam2[i - 1] * alf2;
+                }
+                for (int i = 1; i < nlam1; i++) {
+                    lam1[i] = lam1[i - 1] * alf1;
+                }
             }
         } else {
-            double alf = 1/exp(log(1/0.01)/(nlam-1));
-            for (int i = 1; i < nlam; i++) {
-                lambda2[i] = lambda2[i-1] * alf;
-                lambda1[i] = lambda1[i-1] * alf;
-            }
+            nlam1 = lambda1.size();
+            nlam2 = lambda2.size();
+            lam1.resize(nlam1);
+            lam2.resize(nlam2);
+            lam1 = lambda1;
+            lam2 = lambda2;
         }
 
+        MatrixXd betas(p + q, nlam1 * nlam2);
         VectorXb strong_set = VectorXb::Constant(p+q, false);
         VectorXb active_set = VectorXb::Constant(p+q, true);
         double lambda1_old = 0.0;
@@ -251,20 +326,20 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
 
         //// penalty path loop
         int ncols = 0;
-        for (int l2 = 0; l2 < nlam; l2++) {
-            double lambda2_current = lambda2[l2];
+        for (int l2 = 0; l2 < nlam2; l2++) {
+            double lambda2_current = lam2[l2];
             VectorXd beta = beta_l11;
             VectorXd W = W_l11;
             VectorXd r = r_l11;
 
-            for (int l1 = 0; l1 < nlam; l1++) {
-                double lambda1_current = lambda1[l1];
+            for (int l1 = 0; l1 < nlam1; l1++) {
+                double lambda1_current = lam1[l1];
                 VectorXd gradient = ((X.array().colwise() * r.array()).colwise().sum().array() - (r.sum() * xm).array()) * xs.array();
                 for (int j = 0; j < p+q; j++) {
                     if (j < p) {
-                        strong_set[j] = std::abs(gradient[j]) > alpha1 * (2 * lambda1_current - lambda1_old);
+                        strong_set[j] = std::abs(gradient[j]) > alpha1 * (2 * lambda1_current - lambda1_old) * cmult[j];
                     } else {
-                        strong_set[j] = std::abs(gradient[j]) > alpha2 * (2 * lambda2_current - lambda2_old);
+                        strong_set[j] = std::abs(gradient[j]) > alpha2 * (2 * lambda2_current - lambda2_old) * cmult[j];
                     }
                 }
                 VectorXd beta_old(p+q);
@@ -290,9 +365,9 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
                                 double gj = (X.col(j).dot(r) - xm[j] * r.sum()) * xs[j];
                                 double bj = beta[j];
                                 double wls = gj + bj * xv[j];
-                                double arg = abs(wls) - alpha1 * lambda1_current;
+                                double arg = abs(wls) - alpha1 * cmult[j] * lambda1_current;
                                 if (arg > 0) {
-                                    beta[j] = copysign(arg, wls) / (xv[j] + (1 - alpha1) * lambda1_current);
+                                    beta[j] = copysign(arg, wls) / (xv[j] + (1 - alpha1) * cmult[j] * lambda1_current);
                                 } else {
                                     beta[j] = 0;
                                 }
@@ -310,9 +385,9 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
                                 double gj = (X.col(j).dot(r) - xm[j] * r.sum()) * xs[j];
                                 double bj = beta[j];
                                 double wls = gj + bj * xv[j];
-                                double arg = abs(wls) - alpha2 * lambda2_current;
+                                double arg = abs(wls) - alpha2 * cmult[j] * lambda2_current;
                                 if (arg > 0) {
-                                    beta[j] = copysign(arg, wls) / (xv[j] + (1 - alpha2) * lambda2_current);
+                                    beta[j] = copysign(arg, wls) / (xv[j] + (1 - alpha2) * cmult[j] * lambda2_current);
                                 } else {
                                     beta[j] = 0;
                                 }
@@ -338,7 +413,7 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
                         int num_violations = 0;
                         for (int j = 0; j < p; j++) {
                             if (!strong_set[j]) {
-                                if (gradient[j] > alpha1 * lambda1_current) {
+                                if (gradient[j] > alpha1 * cmult[j] * lambda1_current) {
                                     strong_set[j] = true;
                                     num_violations += 1;
                                 }
@@ -346,7 +421,7 @@ MatrixXd cdl_cox (MatrixXd &y, MatrixXd &x, const Ref<const MatrixXd> &z = Matri
                         }
                         for (int j = p; j < (p+q); j++) {
                             if (!strong_set[j]) {
-                                if (gradient[j] > alpha2 * lambda2_current) {
+                                if (gradient[j] > alpha2 * cmult[j] * lambda2_current) {
                                     strong_set[j] = true;
                                     num_violations += 1;
                                 }
@@ -425,17 +500,17 @@ int main()
 //    z.col(0) << 1,1,0,0,1,1,1,0,1,1;
 //    z.col(1) << 0,0,1,1,0,0,0,1,0,0;
 
-//    MatrixXd beta_glmnet = cdl_cox(y, x);
-//    cout << "beta_1: " << endl << beta_glmnet.col(0).transpose() << endl;
-//    cout << "beta_10: " << endl << beta_glmnet.col(9).transpose() << endl;
-//    cout << "beta_30: " << endl << beta_glmnet.col(29).transpose() << endl;
+    MatrixXd beta_glmnet = cdl_cox(y, x);
+    cout << "beta_1: " << endl << beta_glmnet.col(0).transpose() << endl;
+    cout << "beta_10: " << endl << beta_glmnet.col(9).transpose() << endl;
+    cout << "beta_30: " << endl << beta_glmnet.col(29).transpose() << endl;
 //
 //
     MatrixXd beta_ext = cdl_cox(y, x, z);
     cout << "beta_1_1: " << endl << beta_ext.col(0).transpose() << endl;
     cout << "beta_3_3: " << endl << beta_ext.col(42).transpose() << endl;
-    cout << "beta_4_20: " << endl << beta_ext.col(383).transpose() << endl;
     cout << "beta_10_10: " << endl << beta_ext.col(189).transpose() << endl;
+    cout << "beta_4_20: " << endl << beta_ext.col(383).transpose() << endl;
 
 
 //    cout << "beta_1_1: " << endl;
