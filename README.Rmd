@@ -28,4 +28,4 @@ The first component of the objective function is negative log Breslow's likeliho
 
 The algorithm uses proximal Newton algorithm and cyclic coordinate descent to optimize.
 
-The `Rcpp` adpated Cpp function (to import to `R`), `cdlcoxRcpp()` is to fit the mdoel.
+The `Rcpp` adapted Cpp function (to import to `R`), `cdlcoxRcpp()` is to fit the mdoel.
