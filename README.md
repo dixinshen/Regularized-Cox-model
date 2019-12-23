@@ -1,3 +1,7 @@
+---
+output: github_document
+---
+
 #### This is development repository of `xrnet` package (https://github.com/USCbiostats/xrnet), __survival module__. 
 
 The program is the prototype of regularized Cox's proportional hazard hierachical model to incorporate external information. $y=(t, \delta)$ is survival outcome, $X$ is the conventional design matrix, having dimension $n\times p$. $Z$ is external data matrix, with dimension $p\times q$. In genomics study setting, it could be gene annotation data, which is featrues of the features in $X$. Modelling the two levels of data matrix with hierachical setting;
